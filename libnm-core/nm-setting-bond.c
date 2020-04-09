@@ -731,13 +731,11 @@ verify (NMSetting *setting, NMConnection *connection, GError **error)
 {
 	NMSettingBond *self = NM_SETTING_BOND (setting);
 	NMSettingBondPrivate *priv = NM_SETTING_BOND_GET_PRIVATE (setting);
-	int mode;
 	int miimon;
 	int arp_interval;
 	int num_grat_arp;
 	int num_unsol_na;
-	const char *mode_orig;
-	const char *mode_new;
+	const char *mode_str;
 	const char *arp_ip_target = NULL;
 	const char *lacp_rate;
 	const char *primary;
@@ -783,8 +781,8 @@ verify (NMSetting *setting, NMConnection *connection, GError **error)
 	 */
 
 	/* Verify bond mode */
-	mode_orig = _bond_get_option (self, NM_SETTING_BOND_OPTION_MODE);
-	if (!mode_orig) {
+	mode_str = _bond_get_option (self, NM_SETTING_BOND_OPTION_MODE);
+	if (!mode_str) {
 		g_set_error (error,
 		             NM_CONNECTION_ERROR,
 		             NM_CONNECTION_ERROR_INVALID_PROPERTY,
@@ -793,13 +791,13 @@ verify (NMSetting *setting, NMConnection *connection, GError **error)
 		g_prefix_error (error, "%s.%s: ", NM_SETTING_BOND_SETTING_NAME, NM_SETTING_BOND_OPTIONS);
 		return FALSE;
 	}
-	mode = nm_utils_bond_mode_string_to_int (mode_orig);
-	if (mode == -1) {
+	bond_mode = _nm_setting_bond_mode_from_string (mode_str);
+	if (bond_mode == NM_BOND_MODE_UNKNOWN) {
 		g_set_error (error,
 		             NM_CONNECTION_ERROR,
 		             NM_CONNECTION_ERROR_INVALID_PROPERTY,
 		             _("'%s' is not a valid value for '%s'"),
-		             mode_orig,
+		             mode_str,
 		             NM_SETTING_BOND_OPTION_MODE);
 		g_prefix_error (error,
 		                "%s.%s: ",
@@ -807,18 +805,17 @@ verify (NMSetting *setting, NMConnection *connection, GError **error)
 		                NM_SETTING_BOND_OPTIONS);
 		return FALSE;
 	}
-	mode_new = nm_utils_bond_mode_int_to_string (mode);
 
 	/* Make sure mode is compatible with other settings */
-	if (NM_IN_STRSET (mode_new, "balance-alb",
-	                            "balance-tlb")) {
+	if (NM_IN_SET (bond_mode, NM_BOND_MODE_TLB,
+	                          NM_BOND_MODE_ALB)) {
 		if (arp_interval > 0) {
 			g_set_error (error,
 			             NM_CONNECTION_ERROR,
 			             NM_CONNECTION_ERROR_INVALID_PROPERTY,
 			             _("'%s=%s' is incompatible with '%s > 0'"),
 			             NM_SETTING_BOND_OPTION_MODE,
-			             mode_new,
+			             mode_str,
 			             NM_SETTING_BOND_OPTION_ARP_INTERVAL);
 			g_prefix_error (error,
 			                "%s.%s: ",
@@ -829,7 +826,7 @@ verify (NMSetting *setting, NMConnection *connection, GError **error)
 	}
 
 	primary = _bond_get_option (self, NM_SETTING_BOND_OPTION_PRIMARY);
-	if (NM_IN_STRSET (mode_new, "active-backup")) {
+	if (bond_mode == NM_BOND_MODE_ACTIVEBACKUP) {
 		GError *tmp_error = NULL;
 
 		if (primary && !nm_utils_ifname_valid_kernel (primary, &tmp_error)) {
@@ -858,12 +855,12 @@ verify (NMSetting *setting, NMConnection *connection, GError **error)
 
 	if (   connection
 	    && nm_connection_get_setting_infiniband (connection)) {
-		if (!NM_IN_STRSET (mode_new, "active-backup")) {
+		if (bond_mode != NM_BOND_MODE_ACTIVEBACKUP) {
 			g_set_error (error,
 			             NM_CONNECTION_ERROR,
 			             NM_CONNECTION_ERROR_INVALID_PROPERTY,
 			             _("'%s=%s' is not a valid configuration for '%s'"),
-			             NM_SETTING_BOND_OPTION_MODE, mode_new, NM_SETTING_INFINIBAND_SETTING_NAME);
+			             NM_SETTING_BOND_OPTION_MODE, mode_str, NM_SETTING_INFINIBAND_SETTING_NAME);
 			g_prefix_error (error,
 			                "%s.%s: ",
 			                NM_SETTING_BOND_SETTING_NAME, NM_SETTING_BOND_OPTIONS);
@@ -970,7 +967,7 @@ verify (NMSetting *setting, NMConnection *connection, GError **error)
 
 	lacp_rate = _bond_get_option (self, NM_SETTING_BOND_OPTION_LACP_RATE);
 	if (   lacp_rate
-	    && !nm_streq0 (mode_new, "802.3ad")
+	    && bond_mode != NM_BOND_MODE_8023AD
 	    && !NM_IN_STRSET (lacp_rate, "0", "slow")) {
 		g_set_error (error,
 		             NM_CONNECTION_ERROR,
@@ -999,7 +996,13 @@ verify (NMSetting *setting, NMConnection *connection, GError **error)
 
 	/* *** errors above here should be always fatal, below NORMALIZABLE_ERROR *** */
 
-	if (!nm_streq0 (mode_orig, mode_new)) {
+	if (!NM_IN_STRSET (mode_str,
+	                   "802.3ad",
+	                   "active-backup",
+	                   "balance-rr",
+	                   "balance-tlb",
+	                   "balance-xor",
+	                   "broadcast")) {
 		g_set_error (error,
 		             NM_CONNECTION_ERROR,
 		             NM_CONNECTION_ERROR_INVALID_PROPERTY,
@@ -1010,7 +1013,6 @@ verify (NMSetting *setting, NMConnection *connection, GError **error)
 	}
 
 	/* normalize unsupported options for the current mode */
-	bond_mode = _nm_setting_bond_mode_from_string (mode_new);
 	for (i = 0; priv->options_idx_cache[i].name; i++) {
 		n = &priv->options_idx_cache[i];
 		if (!_nm_setting_bond_option_supported (n->name, bond_mode)) {
@@ -1018,7 +1020,7 @@ verify (NMSetting *setting, NMConnection *connection, GError **error)
 			             NM_CONNECTION_ERROR,
 			             NM_CONNECTION_ERROR_INVALID_PROPERTY,
 			             _("'%s' option is not valid with mode '%s'"),
-			             n->name, mode_new);
+			             n->name, mode_str);
 			g_prefix_error (error,
 			                "%s.%s: ",
 			                NM_SETTING_BOND_SETTING_NAME,
