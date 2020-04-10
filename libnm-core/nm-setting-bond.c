@@ -45,6 +45,7 @@ G_DEFINE_TYPE (NMSettingBond, nm_setting_bond, NM_TYPE_SETTING)
 /*****************************************************************************/
 
 static const char *const valid_options_lst[] = {
+	/* mode must be the first element. nm-device-bond.c relies on that. */
 	NM_SETTING_BOND_OPTION_MODE,
 	NM_SETTING_BOND_OPTION_MIIMON,
 	NM_SETTING_BOND_OPTION_DOWNDELAY,
@@ -145,6 +146,7 @@ NM_UTILS_STRING_TABLE_LOOKUP_STRUCT_DEFINE (
 			nm_assert (G_N_ELEMENTS (LIST) == NM_PTRARRAY_LEN (valid_options_lst));
 			for (i = 0; i < G_N_ELEMENTS (LIST); i++)
 				_nm_assert_bond_meta (&LIST[i].value);
+			nm_assert (nm_streq (valid_options_lst[0], NM_SETTING_BOND_OPTION_MODE));
 		}
 	},
 	{ return NULL; },
@@ -204,6 +206,7 @@ gboolean
 _nm_setting_bond_option_supported (const char *option, NMBondMode mode)
 {
 	nm_assert (option);
+	nm_assert (mode != NM_BOND_MODE_UNKNOWN);
 	nm_assert (_NM_INT_NOT_NEGATIVE (mode) && mode < 32);
 
 	return !NM_FLAGS_ANY (_bond_option_unsupp_mode (option), BIT (mode));
